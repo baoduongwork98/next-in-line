@@ -11,140 +11,101 @@ const app = express();
 const port = 4000;
 
 app.use(cors());
-// const server = http.createServer(app);
-// const io = new Server(server, {
-//   cors: {
-//     origin: '*', // cho phép tất cả client kết nối (bạn có thể giới hạn theo domain)
-//     methods: ['GET', 'POST'],
-//   },
-// });
 app.use(bodyParser.json());
-// Socket.IO - lắng nghe kết nối
-// io.on('connection', (socket) => {
-//   console.log('📡 Client connected:', socket.id);
-// });
-// Đường dẫn tới file lưu dữ liệu
 
 // API routes
-app.post('/create-queue', async (req, res) => {
+app.post('/create-queue', (req, res) => {
+  const { branch, info, service } = req.body;
+
+  const newQueueEntry = {
+    branch,
+    info,
+    service,
+    scannedAt: new Date().toISOString(),
+    table: Math.floor(Math.random() * 4) + 1, // Random table number 1-4
+  };
+
+  const dataFilePath = path.join(
+    __dirname,
+    `table-${newQueueEntry.table}-${newQueueEntry.branch}.json`
+  );
+
   try {
-    const { queue, table, time, info } = req.body;
-
-    const newQueueEntry = {
-      queue,
-      table,
-      time,
-      info,
-      scannedAt: new Date().toISOString(),
-    };
-
-    const dataFilePath = path.join(
-      __dirname,
-      `queue-table-${newQueueEntry.table}.json`
-    );
-    // Đảm bảo file tồn tại
+    // Ensure the file exists, create it if not
     if (!fs.existsSync(dataFilePath)) {
-      fs.writeFileSync(dataFilePath, '[]'); // tạo file rỗng dạng mảng JSON
+      fs.writeFileSync(dataFilePath, JSON.stringify([]));
     }
-    // Đọc dữ liệu cũ
-    fs.readFile(dataFilePath, 'utf8', (err, data) => {
-      if (err) return res.status(500).json({ error: 'Lỗi đọc file' });
 
-      let records = [];
-      try {
-        records = JSON.parse(data);
-      } catch (parseErr) {
-        return res.status(500).json({ error: 'Lỗi định dạng JSON trong file' });
-      }
+    // Read and parse existing data
+    const records = JSON.parse(fs.readFileSync(dataFilePath, 'utf8') || '[]');
 
-      records.push(newQueueEntry);
+    // Assign a new queue number
+    newQueueEntry.queue = records.length
+      ? Math.max(...records.map((record) => record.queue)) + 1
+      : 1;
 
-      // Ghi lại dữ liệu mới vào file
-      fs.writeFile(
-        dataFilePath,
-        JSON.stringify(records, null, 2),
-        (writeErr) => {
-          if (writeErr) return res.status(500).json({ error: 'Lỗi ghi file' });
-          // 👉 Phát sự kiện socket tới tất cả client
-          // io.emit('queue-updated', newQueueEntry);
-          res
-            .status(201)
-            .json({ message: 'Đã lưu thành công', data: newQueueEntry });
-        }
-      );
+    // Add the new entry and write back to the file
+    records.push(newQueueEntry);
+    fs.writeFileSync(dataFilePath, JSON.stringify(records, null, 2));
+
+    res.status(201).json({
+      message: 'Bốc số thứ tự thành công',
+      data: newQueueEntry,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Error creating queue entry' });
+    console.error('Error creating queue:', error);
+    res.status(500).json({ error: 'Bốc số thứ tự lỗi' });
   }
 });
 
-app.get('/queue/:id', (req, res) => {
-  const id = req.params.id;
-  const dataFilePath = path.join(__dirname, `queue-table-${id}.json`);
-  console.log(dataFilePath);
-  // Đảm bảo file tồn tại
+app.get('/queue/:table/:branch', (req, res) => {
+  const { table, branch } = req.params;
+  const dataFilePath = path.join(__dirname, `table-${table}-${branch}.json`);
+
   if (!fs.existsSync(dataFilePath)) {
     return res.status(404).json({ error: 'File không tồn tại' });
   }
-  // Đọc dữ liệu cũ
-  fs.readFile(dataFilePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).json({ error: 'Lỗi đọc file' });
 
-    let records = [];
-    try {
-      records = JSON.parse(data);
-    } catch (parseErr) {
-      return res.status(500).json({ error: 'Lỗi định dạng JSON trong file' });
-    }
+  try {
+    const data = fs.readFileSync(dataFilePath, 'utf8');
+    const records = JSON.parse(data);
 
-    console.log(records);
-
-    if (!records) {
+    if (!records || records.length === 0) {
       return res.status(404).json({ error: 'Không tìm thấy bản ghi' });
     }
 
     res.status(200).json({ data: records });
-  });
+  } catch (error) {
+    console.error('Error reading or parsing file:', error);
+    res.status(500).json({ error: 'Lỗi xử lý dữ liệu' });
+  }
 });
 
-app.delete('/queue/:id/:queue', (req, res) => {
-  const id = req.params.id;
-  const queue = req.params.queue;
-  const dataFilePath = path.join(__dirname, `queue-table-${id}.json`);
+app.delete('/queue/:table/:branch/:queue', (req, res) => {
+  const { table, branch, queue } = req.params;
+  const dataFilePath = path.join(__dirname, `table-${table}-${branch}.json`);
 
-  // Đảm bảo file tồn tại
   if (!fs.existsSync(dataFilePath)) {
     return res.status(404).json({ error: 'File không tồn tại' });
   }
 
-  fs.readFile(dataFilePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).json({ error: 'Lỗi đọc file' });
+  try {
+    const data = fs.readFileSync(dataFilePath, 'utf8');
+    const records = JSON.parse(data);
 
-    let records = [];
-    try {
-      records = JSON.parse(data);
-    } catch (parseErr) {
-      return res.status(500).json({ error: 'Lỗi định dạng JSON trong file' });
-    }
-
-    console.log(queue);
-    // Tìm và xóa bản ghi
     const index = records.findIndex((record) => record.queue === Number(queue));
-    console.log(records);
     if (index === -1) {
       return res.status(404).json({ error: 'Không tìm thấy bản ghi' });
     }
 
     records.splice(index, 1);
+    fs.writeFileSync(dataFilePath, JSON.stringify(records, null, 2));
 
-    // Ghi lại dữ liệu mới vào file
-    fs.writeFile(dataFilePath, JSON.stringify(records, null, 2), (writeErr) => {
-      if (writeErr) return res.status(500).json({ error: 'Lỗi ghi file' });
-      // 👉 Phát sự kiện socket tới tất cả client
-      // io.emit('queue-updated', { queue, action: 'deleted' });
-      res.status(200).json({ message: 'Đã xóa thành công', data: records });
-    });
-  });
+    res.status(200).json({ message: 'Đã xóa thành công', data: records });
+  } catch (error) {
+    console.error('Error processing file:', error);
+    res.status(500).json({ error: 'Lỗi xử lý dữ liệu' });
+  }
 });
 
 app.get('/', (req, res) => {
